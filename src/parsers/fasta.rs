@@ -14,7 +14,7 @@ pub struct FastaSeq {
     alphabet: Alphabet,
     seq_type: SeqType,
     id: String,
-    desc: String,
+    desc: Option<String>,
 }
 
 impl FastaSeq {
@@ -32,7 +32,7 @@ impl FastaSeq {
         alphabet: Alphabet,
         seq_type: SeqType,
         id: String,
-        desc: String,
+        desc: Option<String>,
     ) -> Self {
         Self {
             sequence,
@@ -63,25 +63,22 @@ impl FastaSeq {
             .split_at(
                 input_str_value
                     .find('>')
-                    .expect("Couldn't find the header identification symbol")
+                    .expect("a valid FASTA sequence should have a header starting with '>'")
                     + 1,
             )
             .1
             .split_once('\n')
-            .expect("Expected header and sequence to be separated by a line break");
+            .expect("a valid FASTA sequence should have the header and sequence separated by at least one line break");
 
-        let (id, desc) = header
-            .split_once(' ')
-            .expect("Couldn't split header row correctly");
-        let seq = sequence.replace("\n", "");
+        let (id, desc) = header.split_once(' ').unwrap_or_else(|| (header, ""));
 
-        Ok(Self::new(
-            seq.trim().to_owned(),
-            alphabet,
-            seq_type,
-            id.to_owned(),
-            desc.to_owned(),
-        ))
+        let id = (!id.trim().is_empty())
+            .then(|| id.trim().to_owned())
+            .expect("a valid FASTA sequence should contain an ID");
+        let desc = (!desc.is_empty()).then(|| desc.trim().to_owned());
+        let seq = sequence.replace("\n", "").trim().to_owned();
+
+        Ok(Self::new(seq, alphabet, seq_type, id, desc))
     }
 
     pub fn sequence(&self) -> &str {
@@ -92,8 +89,8 @@ impl FastaSeq {
         &self.id
     }
 
-    pub fn desc(&self) -> &str {
-        &self.desc
+    pub fn desc(&self) -> Option<&str> {
+        self.desc.as_deref()
     }
 
     pub fn alphabet(&self) -> Alphabet {
@@ -120,7 +117,21 @@ mod test {
             .expect("Couldn't create FASTA sequence");
 
         assert_eq!(fasta.id(), "Seq1");
-        assert_eq!(fasta.desc(), "Homo Sapiens COX1");
+        assert_eq!(fasta.desc(), Some("Homo Sapiens COX1"));
+        assert_eq!(fasta.sequence(), "ACTGGGTGTGTAAATTTGGATG");
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACDNA);
+        assert_eq!(fasta.seq_type(), SeqType::DNA);
+        assert_eq!(fasta.len(), fasta.sequence().len());
+    }
+
+    #[test]
+    fn create_seq_from_string_no_desc() {
+        let seq = String::from("  \n>Seq1\nACTGGGTGTGT\n\nAAATTTGG\nATG");
+        let fasta = FastaSeq::from_string(seq, SeqType::DNA, Alphabet::IUPACDNA)
+            .expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.id(), "Seq1");
+        assert_eq!(fasta.desc(), None);
         assert_eq!(fasta.sequence(), "ACTGGGTGTGTAAATTTGGATG");
         assert_eq!(fasta.alphabet(), Alphabet::IUPACDNA);
         assert_eq!(fasta.seq_type(), SeqType::DNA);
