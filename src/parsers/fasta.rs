@@ -1,6 +1,9 @@
 use std::io::Error;
 
-use crate::{alphabets::Alphabet, seq::SeqType};
+use crate::{
+    alphabets::Alphabet,
+    seq::{SeqType, AMINOACID_EXCLUSIVE_SYMBOLS},
+};
 
 pub struct FastaRecord {
     sequences: Vec<FastaSeq>,
@@ -81,6 +84,37 @@ impl FastaSeq {
         Ok(Self::new(seq, alphabet, seq_type, id, desc))
     }
 
+    fn infer_type_and_alphabet(input_str: impl AsRef<str>) -> Result<(SeqType, Alphabet), Error> {
+        let input_str_value = input_str.as_ref().to_ascii_uppercase();
+
+        if input_str_value.contains('U') {
+            Ok((SeqType::RNA, Alphabet::IUPACNucleicAcid))
+        } else if AMINOACID_EXCLUSIVE_SYMBOLS
+            .clone()
+            .any(|symbol| input_str_value.contains(*symbol))
+        {
+            Ok((SeqType::Protein, Alphabet::IUPACProtein))
+        } else {
+            Ok((SeqType::default(), Alphabet::default()))
+        }
+    }
+
+    pub fn from_string_inferred(input_str: impl AsRef<str>) -> Result<Self, Error> {
+        let input_str_value = input_str.as_ref();
+        // TODO: Improve this
+        let fasta_seq =
+            Self::from_string(input_str_value, SeqType::DNA, Alphabet::IUPACNucleicAcid)?;
+        let (seq_type, alphabet) = Self::infer_type_and_alphabet(fasta_seq.sequence())?;
+
+        Ok(Self::new(
+            fasta_seq.sequence().to_owned(),
+            alphabet,
+            seq_type,
+            fasta_seq.id().to_owned(),
+            fasta_seq.desc().map(|val| val.to_owned()),
+        ))
+    }
+
     pub fn sequence(&self) -> &str {
         &self.sequence
     }
@@ -106,6 +140,8 @@ impl FastaSeq {
     }
 }
 
+impl FastaRecord {}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -113,13 +149,13 @@ mod test {
     #[test]
     fn create_seq_from_string() {
         let seq = String::from("  \n>Seq1 Homo Sapiens COX1\nACTGGGTGTGT\n\nAAATTTGG\nATG");
-        let fasta = FastaSeq::from_string(seq, SeqType::DNA, Alphabet::IUPACDNA)
+        let fasta = FastaSeq::from_string(seq, SeqType::DNA, Alphabet::IUPACNucleicAcid)
             .expect("Couldn't create FASTA sequence");
 
         assert_eq!(fasta.id(), "Seq1");
         assert_eq!(fasta.desc(), Some("Homo Sapiens COX1"));
         assert_eq!(fasta.sequence(), "ACTGGGTGTGTAAATTTGGATG");
-        assert_eq!(fasta.alphabet(), Alphabet::IUPACDNA);
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACNucleicAcid);
         assert_eq!(fasta.seq_type(), SeqType::DNA);
         assert_eq!(fasta.len(), fasta.sequence().len());
     }
@@ -127,14 +163,53 @@ mod test {
     #[test]
     fn create_seq_from_string_no_desc() {
         let seq = String::from("  \n>Seq1\nACTGGGTGTGT\n\nAAATTTGG\nATG");
-        let fasta = FastaSeq::from_string(seq, SeqType::DNA, Alphabet::IUPACDNA)
+        let fasta = FastaSeq::from_string(seq, SeqType::DNA, Alphabet::IUPACNucleicAcid)
             .expect("Couldn't create FASTA sequence");
 
         assert_eq!(fasta.id(), "Seq1");
         assert_eq!(fasta.desc(), None);
         assert_eq!(fasta.sequence(), "ACTGGGTGTGTAAATTTGGATG");
-        assert_eq!(fasta.alphabet(), Alphabet::IUPACDNA);
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACNucleicAcid);
         assert_eq!(fasta.seq_type(), SeqType::DNA);
         assert_eq!(fasta.len(), fasta.sequence().len());
+    }
+
+    #[test]
+    fn create_seq_from_string_inferred() {
+        // Default, should be inferred as DNA
+        let seq = String::from("\n>Seq1\n\nACTGCATT");
+        let fasta = FastaSeq::from_string_inferred(seq).expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACNucleicAcid);
+        assert_eq!(fasta.seq_type(), SeqType::DNA);
+
+        // Should be inferred as RNA
+        let seq = String::from("\n>Seq1\n\nACUGCAuu\n");
+        let fasta = FastaSeq::from_string_inferred(seq).expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACNucleicAcid);
+        assert_eq!(fasta.seq_type(), SeqType::RNA);
+
+        // Should be inferred as Protein
+        let seq = String::from("\n>Seq1\n\nYWATTVEIL\n");
+        let fasta = FastaSeq::from_string_inferred(seq).expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACProtein);
+        assert_eq!(fasta.seq_type(), SeqType::Protein);
+
+        // Should be inferred as DNA, the default since we can't differentiate between DNA/RNA
+        let seq = String::from("\n>Seq1\n\nACAABBV\n");
+        let fasta = FastaSeq::from_string_inferred(seq).expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.alphabet(), Alphabet::IUPACNucleicAcid);
+        assert_eq!(fasta.seq_type(), SeqType::DNA);
+
+        // Should be inferred as DNA, although it looks like a protein, because we can't differentiate
+        // and that's the default
+        let seq = String::from("\n>Seq1\n\nATYYVHHR\n");
+        let fasta = FastaSeq::from_string_inferred(seq).expect("Couldn't create FASTA sequence");
+
+        assert_eq!(fasta.alphabet(), Alphabet::default());
+        assert_eq!(fasta.seq_type(), SeqType::default());
     }
 }
